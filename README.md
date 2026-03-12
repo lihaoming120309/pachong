@@ -60,6 +60,7 @@ python sentiment_topic_pipeline.py \
 - `output/posts_with_topics.csv`：每条文本及其话题编号
 - `output/topic_summary.csv`：每个话题的词与 Ollama 命名
 - `output/analysis_report.json`：简要统计报告
+- `output/collector_diagnostics.json`：各平台抓取诊断（失败原因、HTTP 状态、响应片段、排查建议）
 
 ## Jupyter 里运行
 
@@ -107,3 +108,15 @@ python sentiment_topic_pipeline.py \
 ```
 
 > 提示：平台接口变更频繁，`API_URL` 正确并不代表可直接抓取；鉴权 Cookie、签名头、Referer/Origin 通常同样关键。
+
+
+## 抓取失败诊断
+
+当某个平台抓取失败时，脚本会继续完成其余平台，并在 `output/collector_diagnostics.json` 中记录：
+
+- 失败平台、API URL、最后失败页码
+- 异常类型与异常信息
+- HTTP 状态码、`Content-Type`、响应体前 300 字符
+- 自动生成的排查建议（如鉴权失败、非 JSON 返回、连接重置、限流等）
+
+可先查看日志中的 `诊断建议`，再结合该 JSON 文件逐项排查。
