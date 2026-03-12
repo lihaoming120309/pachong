@@ -28,6 +28,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def load_text_from_file(file_path: str) -> str:
+    """读取本地 txt 内容，找不到文件时返回空字符串。"""
+    if not file_path:
+        return ""
+    path = Path(file_path).expanduser()
+    if not path.exists():
+        logger.warning("文件不存在: %s", path)
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def load_headers_from_file(file_path: str) -> dict[str, str]:
+    """读取 Header 配置文件，每行格式：Header-Name: value。"""
+    content = load_text_from_file(file_path)
+    headers: dict[str, str] = {}
+    if not content:
+        return headers
+
+    for line in content.splitlines():
+        row = line.strip()
+        if not row or row.startswith("#") or ":" not in row:
+            continue
+        key, value = row.split(":", 1)
+        headers[key.strip()] = value.strip()
+
+    return headers
+
 @dataclass
 class Post:
     platform: str
@@ -53,18 +81,27 @@ class WeiboCollector(BaseCollector):
 
     API_URL = "https://m.weibo.cn/api/container/getIndex"
 
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        timeout: int = 10,
+        cookie: str = "",
+        extra_headers: dict[str, str] | None = None,
+    ):
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
-            }
-        )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://m.weibo.cn",
+        }
+        if cookie:
+            headers["Cookie"] = cookie
+        if extra_headers:
+            headers.update(extra_headers)
+        self.session.headers.update(headers)
 
     @staticmethod
     def _clean_html(raw_html: str) -> str:
@@ -123,19 +160,28 @@ class BilibiliCollector(BaseCollector):
 
     API_URL = "https://api.bilibili.com/x/web-interface/search/type"
 
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        timeout: int = 10,
+        cookie: str = "",
+        extra_headers: dict[str, str] | None = None,
+    ):
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Referer": "https://www.bilibili.com",
-            }
-        )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.bilibili.com",
+            "Origin": "https://www.bilibili.com",
+        }
+        if cookie:
+            headers["Cookie"] = cookie
+        if extra_headers:
+            headers.update(extra_headers)
+        self.session.headers.update(headers)
 
     @staticmethod
     def _clean_highlight_text(text: str) -> str:
@@ -282,12 +328,16 @@ def run_pipeline(
     query: str,
     per_platform_limit: int,
     output_dir: Path,
+    weibo_cookie: str,
+    bilibili_cookie: str,
     xhs_cookie: str,
+    weibo_extra_headers: dict[str, str] | None,
+    bilibili_extra_headers: dict[str, str] | None,
     ollama_model: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     collectors: list[BaseCollector] = [
-        WeiboCollector(),
-        BilibiliCollector(),
+        WeiboCollector(cookie=weibo_cookie, extra_headers=weibo_extra_headers),
+        BilibiliCollector(cookie=bilibili_cookie, extra_headers=bilibili_extra_headers),
         XiaohongshuCollector(cookie=xhs_cookie),
     ]
 
@@ -372,7 +422,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--query", default="适老化设备", help="搜索关键词")
     parser.add_argument("--limit", type=int, default=80, help="每个平台抓取上限")
     parser.add_argument("--output-dir", default="output", help="结果输出目录")
+    parser.add_argument("--weibo-cookie", default="", help="微博 Cookie 字符串")
+    parser.add_argument("--weibo-cookie-file", default="", help="微博 Cookie txt 文件")
+    parser.add_argument("--weibo-headers-file", default="", help="微博额外 Headers txt 文件")
+    parser.add_argument("--bilibili-cookie", default="", help="B 站 Cookie 字符串")
+    parser.add_argument("--bilibili-cookie-file", default="", help="B 站 Cookie txt 文件")
+    parser.add_argument("--bilibili-headers-file", default="", help="B 站额外 Headers txt 文件")
     parser.add_argument("--xhs-cookie", default="", help="小红书 Cookie")
+    parser.add_argument("--xhs-cookie-file", default="", help="小红书 Cookie txt 文件")
     parser.add_argument("--ollama-model", default="qwen2.5:7b", help="Ollama 模型名")
     return parser
 
@@ -382,11 +439,20 @@ def main(argv: list[str] | None = None) -> None:
     args, unknown = parser.parse_known_args(argv)
     if unknown:
         logger.info("忽略未知参数: %s", unknown)
+
+    weibo_cookie = args.weibo_cookie or load_text_from_file(args.weibo_cookie_file)
+    bilibili_cookie = args.bilibili_cookie or load_text_from_file(args.bilibili_cookie_file)
+    xhs_cookie = args.xhs_cookie or load_text_from_file(args.xhs_cookie_file)
+
     run_pipeline(
         query=args.query,
         per_platform_limit=args.limit,
         output_dir=Path(args.output_dir),
-        xhs_cookie=args.xhs_cookie,
+        weibo_cookie=weibo_cookie,
+        bilibili_cookie=bilibili_cookie,
+        xhs_cookie=xhs_cookie,
+        weibo_extra_headers=load_headers_from_file(args.weibo_headers_file),
+        bilibili_extra_headers=load_headers_from_file(args.bilibili_headers_file),
         ollama_model=args.ollama_model,
     )
 
