@@ -7,7 +7,7 @@
 1. 安装依赖：
 
 ```bash
-pip install pandas requests scikit-learn bertopic sentence-transformers umap-learn hdbscan
+pip install pandas requests scikit-learn bertopic sentence-transformers umap-learn hdbscan jieba
 ```
 
 2. 运行：
@@ -16,7 +16,44 @@ pip install pandas requests scikit-learn bertopic sentence-transformers umap-lea
 python sentiment_topic_pipeline.py --query 适老化设备 --limit 80 --output-dir output
 ```
 
-> 小红书通常需要有效 Cookie（以及可能的签名参数），可通过 `--xhs-cookie` 传入。
+> 微博/B站/小红书常常需要登录态。脚本默认直接读取本地 txt Cookie 文件（可通过 `--*-cookie-file` 指定路径）。
+
+可选：如果需要更完整请求头，可用 `--weibo-headers-file` / `--bilibili-headers-file` 传入 txt（每行 `Header-Name: value`）。
+
+
+## Cookie 与 Header 文件示例
+
+默认文件名：`weibo_cookie.txt`、`bilibili_cookie.txt`、`xhs_cookie.txt`。
+
+`weibo_cookie.txt` / `bilibili_cookie.txt` / `xhs_cookie.txt` 内容示例：
+
+```txt
+SESSDATA=xxx; bili_jct=xxx; ...
+```
+
+`weibo_headers.txt` 内容示例（B 站同理）：
+
+```txt
+X-Requested-With: XMLHttpRequest
+Accept-Language: zh-CN,zh;q=0.9
+```
+
+运行示例：
+
+```bash
+python sentiment_topic_pipeline.py \
+  --query 适老化设备 \
+  --limit 80 \
+  --weibo-cookie-file weibo_cookie.txt \
+  --bilibili-cookie-file bilibili_cookie.txt \
+  --xhs-cookie-file xhs_cookie.txt \
+  --weibo-headers-file weibo_headers.txt \
+  --bilibili-headers-file bilibili_headers.txt
+```
+
+## 分词说明
+
+- 主题建模阶段使用 `jieba` 对中文文本分词，不再手动维护固定停用词列表。
 
 ## 输出文件
 
