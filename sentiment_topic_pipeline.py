@@ -13,9 +13,9 @@ import argparse
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import jieba
 import pandas as pd
@@ -29,6 +29,104 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+
+@dataclass
+class CollectorDiagnostic:
+    platform: str
+    collector: str
+    api_url: str
+    status: str = "not_started"
+    total_posts: int = 0
+    pages_succeeded: int = 0
+    last_page: int = 0
+    last_http_status: int | None = None
+    last_error_type: str = ""
+    last_error_message: str = ""
+    last_content_type: str = ""
+    last_response_snippet: str = ""
+    hint: str = ""
+    notes: list[str] = field(default_factory=list)
+
+    def mark_error(
+        self,
+        *,
+        page: int,
+        exc: Exception | None = None,
+        response: requests.Response | None = None,
+        hint: str = "",
+        note: str = "",
+    ) -> None:
+        self.status = "failed"
+        self.last_page = page
+        if exc is not None:
+            self.last_error_type = type(exc).__name__
+            self.last_error_message = str(exc)
+        if response is not None:
+            self.last_http_status = response.status_code
+            self.last_content_type = response.headers.get("Content-Type", "")
+            snippet = (response.text or "")[:300]
+            self.last_response_snippet = snippet.replace("\n", " ")
+        if hint:
+            self.hint = hint
+        if note:
+            self.notes.append(note)
+
+    def mark_warning(self, *, page: int, note: str, hint: str = "") -> None:
+        if self.status == "not_started":
+            self.status = "warning"
+        self.last_page = page
+        self.notes.append(note)
+        if hint and not self.hint:
+            self.hint = hint
+
+    def mark_success_page(self, page: int, added_count: int) -> None:
+        self.pages_succeeded += 1
+        self.last_page = page
+        self.total_posts += added_count
+        if self.status in {"not_started", "warning"}:
+            self.status = "running"
+
+    def finalize(self) -> None:
+        if self.status in {"not_started", "running"}:
+            self.status = "ok" if self.total_posts > 0 else "warning"
+            if self.total_posts == 0 and not self.hint:
+                self.hint = "请求成功但未拿到帖子，可能关键词过窄或返回结构变化。"
+
+
+def infer_hint_from_exception(exc: Exception) -> str:
+    msg = str(exc).lower()
+    etype = type(exc).__name__.lower()
+    if "jsondecodeerror" in etype or "expecting value" in msg:
+        return "响应不是 JSON，可能被风控重定向到登录/验证页，或 API URL 已变更。"
+    if "timeout" in msg:
+        return "请求超时，建议稍后重试或降低并发/频率。"
+    if "connection aborted" in msg or "connection reset" in msg or "10054" in msg:
+        return "连接被对端重置，常见于反爬限流或 TLS/WAF 拦截。"
+    if "name or service not known" in msg or "nodename nor servname" in msg:
+        return "DNS 解析失败，请检查网络或域名是否正确。"
+    return "请结合 HTTP 状态码、响应片段和请求头检查鉴权或接口参数。"
+
+
+def infer_hint_from_status(status_code: int) -> str:
+    if status_code in {401, 403}:
+        return "鉴权失败：请检查 Cookie、签名头（如 x-s/x-t）及 Referer/Origin。"
+    if status_code == 404:
+        return "接口不存在：API_URL 可能失效或路径已调整。"
+    if status_code == 429:
+        return "触发限流：建议降低频率、增加重试间隔并使用稳定登录态。"
+    if 500 <= status_code < 600:
+        return "服务端异常：可稍后重试，或检查参数是否触发风控。"
+    return "HTTP 异常：请检查请求参数与请求头是否与浏览器一致。"
+
+
+def probe_json(
+    response: requests.Response,
+) -> tuple[dict[str, Any] | list[Any] | None, Exception | None]:
+    try:
+        return response.json(), None
+    except Exception as exc:  # noqa: BLE001
+        return None, exc
 
 
 
@@ -79,6 +177,16 @@ class Post:
 
 
 class BaseCollector:
+    platform = ""
+
+    def __init__(self, api_url: str):
+        self.api_url = api_url
+        self.diagnostic = CollectorDiagnostic(
+            platform=self.platform or self.__class__.__name__.lower(),
+            collector=self.__class__.__name__,
+            api_url=api_url,
+        )
+
     def collect(self, query: str, limit: int = 100) -> list[Post]:
         raise NotImplementedError
 
@@ -86,15 +194,18 @@ class BaseCollector:
 class WeiboCollector(BaseCollector):
     """微博移动端公开搜索接口（无需登录时返回有限数据）。"""
 
-    API_URL = "https://m.weibo.cn/api/container/getIndex"
+    platform = "weibo"
+    DEFAULT_API_URL = "https://m.weibo.cn/api/container/getIndex"
 
     def __init__(
         self,
         timeout: int = 10,
         cookie: str = "",
         extra_headers: dict[str, str] | None = None,
+        api_url: str | None = None,
     ):
         self.timeout = timeout
+        super().__init__((api_url or self.DEFAULT_API_URL).strip())
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -124,15 +235,27 @@ class WeiboCollector(BaseCollector):
                 "page": page,
             }
             try:
-                resp = self.session.get(self.API_URL, params=params, timeout=self.timeout)
+                resp = self.session.get(self.api_url, params=params, timeout=self.timeout)
                 resp.raise_for_status()
-                data = resp.json()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("微博抓取中断，第 %s 页失败: %s", page, exc)
+                self.diagnostic.mark_error(page=page, exc=exc, hint=infer_hint_from_exception(exc))
+                logger.warning("微博抓取中断，第 %s 页失败: %s | 诊断建议: %s", page, exc, self.diagnostic.hint)
                 break
 
-            cards = data.get("data", {}).get("cards", [])
+            data, json_exc = probe_json(resp)
+            if json_exc is not None:
+                self.diagnostic.mark_error(
+                    page=page,
+                    exc=json_exc,
+                    response=resp,
+                    hint="返回体不是 JSON，可能命中登录页/验证页或接口路径失效。",
+                )
+                logger.warning("微博抓取中断，第 %s 页 JSON 解析失败: %s | HTTP=%s", page, json_exc, resp.status_code)
+                break
+
+            cards = (data or {}).get("data", {}).get("cards", [])
             if not cards:
+                self.diagnostic.mark_warning(page=page, note="返回 cards 为空", hint="请求成功但无结果，可能关键词较窄或返回结构变化。")
                 break
 
             page_items = 0
@@ -156,24 +279,30 @@ class WeiboCollector(BaseCollector):
                     break
 
             if page_items == 0:
+                self.diagnostic.mark_warning(page=page, note="cards 存在但无 mblog 项", hint="返回结构可能变化（未找到 mblog 字段）。")
                 break
+            self.diagnostic.mark_success_page(page, page_items)
             page += 1
 
+        self.diagnostic.finalize()
         return posts
 
 
 class BilibiliCollector(BaseCollector):
     """B 站公开视频搜索接口。"""
 
-    API_URL = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi"
+    platform = "bilibili"
+    DEFAULT_API_URL = "https://api.bilibili.com/x/web-interface/search/type"
 
     def __init__(
         self,
         timeout: int = 10,
         cookie: str = "",
         extra_headers: dict[str, str] | None = None,
+        api_url: str | None = None,
     ):
         self.timeout = timeout
+        super().__init__((api_url or self.DEFAULT_API_URL).strip())
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -204,17 +333,25 @@ class BilibiliCollector(BaseCollector):
                 "page": page,
             }
             try:
-                resp = self.session.get(self.API_URL, params=params, timeout=self.timeout)
+                resp = self.session.get(self.api_url, params=params, timeout=self.timeout)
                 resp.raise_for_status()
-                payload = resp.json()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("B站抓取中断，第 %s 页失败: %s", page, exc)
+                self.diagnostic.mark_error(page=page, exc=exc, hint=infer_hint_from_exception(exc))
+                logger.warning("B站抓取中断，第 %s 页失败: %s | 诊断建议: %s", page, exc, self.diagnostic.hint)
                 break
 
-            result = payload.get("data", {}).get("result") or []
+            payload, json_exc = probe_json(resp)
+            if json_exc is not None:
+                self.diagnostic.mark_error(page=page, exc=json_exc, response=resp, hint="返回体不是 JSON，可能触发风控页。")
+                logger.warning("B站抓取中断，第 %s 页 JSON 解析失败: %s | HTTP=%s", page, json_exc, resp.status_code)
+                break
+
+            result = (payload or {}).get("data", {}).get("result") or []
             if not result:
+                self.diagnostic.mark_warning(page=page, note="data.result 为空", hint="请求成功但结果为空，可能关键词无结果或接口字段变化。")
                 break
 
+            page_items = 0
             for item in result:
                 bvid = item.get("bvid", "")
                 posts.append(
@@ -228,19 +365,24 @@ class BilibiliCollector(BaseCollector):
                         extra={"author": item.get("author")},
                     )
                 )
+                page_items += 1
                 if len(posts) >= limit:
                     break
 
+            self.diagnostic.mark_success_page(page, page_items)
             page += 1
 
+        self.diagnostic.finalize()
         return posts
 
 
 class XiaohongshuCollector(BaseCollector):
-    API_URL = "https://as.xiaohongshu.com/api/sec/v1/scripting"
+    platform = "xiaohongshu"
+    DEFAULT_API_URL = "https://edith.xiaohongshu.com/api/sns/web/v1/search/notes"
 
-    def __init__(self, cookie: str = "", timeout: int = 10):
+    def __init__(self, cookie: str = "", timeout: int = 10, api_url: str | None = None):
         self.timeout = timeout
+        super().__init__((api_url or self.DEFAULT_API_URL).strip())
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -248,9 +390,9 @@ class XiaohongshuCollector(BaseCollector):
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            "Content-Type": "text/html; charset=utf-8",
-            "Origin": "https://www.xiaohongshu.com/explore",
-            "Referer": "strict-origin-when-cross-origin",
+            "Content-Type": "application/json;charset=UTF-8",
+            "Origin": "https://www.xiaohongshu.com",
+            "Referer": "https://www.xiaohongshu.com/",
         }
         if cookie:
             headers["Cookie"] = cookie
@@ -269,20 +411,34 @@ class XiaohongshuCollector(BaseCollector):
                 "note_type": 0,
             }
             try:
-                resp = self.session.post(self.API_URL, json=body, timeout=self.timeout)
+                resp = self.session.post(self.api_url, json=body, timeout=self.timeout)
                 if resp.status_code in {401, 403}:
-                    logger.warning("小红书接口鉴权失败，请配置有效 cookie/x-s/x-t。")
+                    self.diagnostic.mark_error(
+                        page=page,
+                        response=resp,
+                        hint=infer_hint_from_status(resp.status_code),
+                        note="小红书常需 Cookie + x-s/x-t 等签名头",
+                    )
+                    logger.warning("小红书接口鉴权失败，HTTP=%s，建议检查 cookie/x-s/x-t。", resp.status_code)
                     break
                 resp.raise_for_status()
-                payload = resp.json()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("小红书抓取中断，第 %s 页失败: %s", page, exc)
+                self.diagnostic.mark_error(page=page, exc=exc, hint=infer_hint_from_exception(exc))
+                logger.warning("小红书抓取中断，第 %s 页失败: %s | 诊断建议: %s", page, exc, self.diagnostic.hint)
                 break
 
-            items = payload.get("data", {}).get("items") or []
+            payload, json_exc = probe_json(resp)
+            if json_exc is not None:
+                self.diagnostic.mark_error(page=page, exc=json_exc, response=resp, hint="返回体不是 JSON，可能是风控页或网关拦截。")
+                logger.warning("小红书抓取中断，第 %s 页 JSON 解析失败: %s | HTTP=%s", page, json_exc, resp.status_code)
+                break
+
+            items = (payload or {}).get("data", {}).get("items") or []
             if not items:
+                self.diagnostic.mark_warning(page=page, note="data.items 为空", hint="请求成功但无结果，可能参数/签名缺失或字段变化。")
                 break
 
+            page_items = 0
             for item in items:
                 note = item.get("note_card") or {}
                 note_id = note.get("note_id", "")
@@ -297,11 +453,14 @@ class XiaohongshuCollector(BaseCollector):
                         extra={"user": (note.get("user") or {}).get("nickname")},
                     )
                 )
+                page_items += 1
                 if len(posts) >= limit:
                     break
 
+            self.diagnostic.mark_success_page(page, page_items)
             page += 1
 
+        self.diagnostic.finalize()
         return posts
 
 
@@ -345,29 +504,47 @@ def run_pipeline(
     weibo_extra_headers: dict[str, str] | None,
     bilibili_extra_headers: dict[str, str] | None,
     ollama_model: str,
+    weibo_api_url: str,
+    bilibili_api_url: str,
+    xhs_api_url: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     collectors: list[BaseCollector] = [
         WeiboCollector(
             cookie=load_text_from_file(weibo_cookie_file),
             extra_headers=weibo_extra_headers,
+            api_url=weibo_api_url,
         ),
         BilibiliCollector(
             cookie=load_text_from_file(bilibili_cookie_file),
             extra_headers=bilibili_extra_headers,
+            api_url=bilibili_api_url,
         ),
-        XiaohongshuCollector(cookie=load_text_from_file(xhs_cookie_file)),
+        XiaohongshuCollector(
+            cookie=load_text_from_file(xhs_cookie_file),
+            api_url=xhs_api_url,
+        ),
     ]
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     all_posts: list[Post] = []
+    diagnostics: list[dict[str, Any]] = []
     for collector in collectors:
         name = collector.__class__.__name__
         logger.info("开始抓取: %s", name)
         posts = collector.collect(query=query, limit=per_platform_limit)
         logger.info("%s 抓取完成: %s 条", name, len(posts))
         all_posts.extend(posts)
+        diagnostics.append(asdict(collector.diagnostic))
+
+    (output_dir / "collector_diagnostics.json").write_text(
+        json.dumps(diagnostics, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info("抓取诊断已输出: %s", output_dir / "collector_diagnostics.json")
 
     if not all_posts:
-        raise RuntimeError("未抓取到任何文本，请检查网络、关键词或平台鉴权信息。")
+        raise RuntimeError("未抓取到任何文本，请检查 output/collector_diagnostics.json 了解平台失败原因。")
 
     df = pd.DataFrame(asdict(p) for p in all_posts)
     df["merged_text"] = df[["title", "content"]].fillna("").agg(" ".join, axis=1).str.strip()
@@ -416,7 +593,6 @@ def run_pipeline(
     info["custom_name"] = custom_names
 
     # 输出结果
-    output_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_dir / "posts_with_topics.csv", index=False, encoding="utf-8-sig")
     info.to_csv(output_dir / "topic_summary.csv", index=False, encoding="utf-8-sig")
 
@@ -445,6 +621,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bilibili-headers-file", default="", help="B 站额外 Headers txt 文件")
     parser.add_argument("--xhs-cookie-file", default="xhs_cookie.txt", help="小红书 Cookie txt 文件")
     parser.add_argument("--ollama-model", default="qwen2.5:7b", help="Ollama 模型名")
+    parser.add_argument(
+        "--weibo-api-url",
+        default=WeiboCollector.DEFAULT_API_URL,
+        help="微博搜索 API 地址（默认值可用，一般无需修改）",
+    )
+    parser.add_argument(
+        "--bilibili-api-url",
+        default=BilibiliCollector.DEFAULT_API_URL,
+        help="B站搜索 API 地址（平台变更时可覆盖）",
+    )
+    parser.add_argument(
+        "--xhs-api-url",
+        default=XiaohongshuCollector.DEFAULT_API_URL,
+        help="小红书搜索 API 地址（平台变更时可覆盖）",
+    )
     return parser
 
 
@@ -464,6 +655,9 @@ def main(argv: list[str] | None = None) -> None:
         weibo_extra_headers=load_headers_from_file(args.weibo_headers_file),
         bilibili_extra_headers=load_headers_from_file(args.bilibili_headers_file),
         ollama_model=args.ollama_model,
+        weibo_api_url=args.weibo_api_url,
+        bilibili_api_url=args.bilibili_api_url,
+        xhs_api_url=args.xhs_api_url,
     )
 
 
