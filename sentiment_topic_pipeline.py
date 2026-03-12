@@ -165,7 +165,7 @@ class WeiboCollector(BaseCollector):
 class BilibiliCollector(BaseCollector):
     """B 站公开视频搜索接口。"""
 
-    API_URL = "https://api.bilibili.com/x/web-interface/search/type"
+    API_URL = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi"
 
     def __init__(
         self,
@@ -237,15 +237,19 @@ class BilibiliCollector(BaseCollector):
 
 
 class XiaohongshuCollector(BaseCollector):
-    API_URL = "https://www.xiaohongshu.com/explore"
+    API_URL = "https://as.xiaohongshu.com/api/sec/v1/scripting"
 
     def __init__(self, cookie: str = "", timeout: int = 10):
         self.timeout = timeout
         self.session = requests.Session()
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
             "Content-Type": "text/html; charset=utf-8",
-            "Origin": "https://www.xiaohongshu.com",
+            "Origin": "https://www.xiaohongshu.com/explore",
             "Referer": "strict-origin-when-cross-origin",
         }
         if cookie:
