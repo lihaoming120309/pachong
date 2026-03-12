@@ -86,15 +86,17 @@ class BaseCollector:
 class WeiboCollector(BaseCollector):
     """微博移动端公开搜索接口（无需登录时返回有限数据）。"""
 
-    API_URL = "https://m.weibo.cn/api/container/getIndex"
+    DEFAULT_API_URL = "https://m.weibo.cn/api/container/getIndex"
 
     def __init__(
         self,
         timeout: int = 10,
         cookie: str = "",
         extra_headers: dict[str, str] | None = None,
+        api_url: str | None = None,
     ):
         self.timeout = timeout
+        self.api_url = (api_url or self.DEFAULT_API_URL).strip()
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -124,7 +126,7 @@ class WeiboCollector(BaseCollector):
                 "page": page,
             }
             try:
-                resp = self.session.get(self.API_URL, params=params, timeout=self.timeout)
+                resp = self.session.get(self.api_url, params=params, timeout=self.timeout)
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as exc:  # noqa: BLE001
@@ -165,15 +167,17 @@ class WeiboCollector(BaseCollector):
 class BilibiliCollector(BaseCollector):
     """B 站公开视频搜索接口。"""
 
-    API_URL = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi"
+    DEFAULT_API_URL = "https://api.bilibili.com/x/web-interface/search/type"
 
     def __init__(
         self,
         timeout: int = 10,
         cookie: str = "",
         extra_headers: dict[str, str] | None = None,
+        api_url: str | None = None,
     ):
         self.timeout = timeout
+        self.api_url = (api_url or self.DEFAULT_API_URL).strip()
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -204,7 +208,7 @@ class BilibiliCollector(BaseCollector):
                 "page": page,
             }
             try:
-                resp = self.session.get(self.API_URL, params=params, timeout=self.timeout)
+                resp = self.session.get(self.api_url, params=params, timeout=self.timeout)
                 resp.raise_for_status()
                 payload = resp.json()
             except Exception as exc:  # noqa: BLE001
@@ -237,10 +241,11 @@ class BilibiliCollector(BaseCollector):
 
 
 class XiaohongshuCollector(BaseCollector):
-    API_URL = "https://as.xiaohongshu.com/api/sec/v1/scripting"
+    DEFAULT_API_URL = "https://edith.xiaohongshu.com/api/sns/web/v1/search/notes"
 
-    def __init__(self, cookie: str = "", timeout: int = 10):
+    def __init__(self, cookie: str = "", timeout: int = 10, api_url: str | None = None):
         self.timeout = timeout
+        self.api_url = (api_url or self.DEFAULT_API_URL).strip()
         self.session = requests.Session()
         headers = {
             "User-Agent": (
@@ -248,9 +253,9 @@ class XiaohongshuCollector(BaseCollector):
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            "Content-Type": "text/html; charset=utf-8",
-            "Origin": "https://www.xiaohongshu.com/explore",
-            "Referer": "strict-origin-when-cross-origin",
+            "Content-Type": "application/json;charset=UTF-8",
+            "Origin": "https://www.xiaohongshu.com",
+            "Referer": "https://www.xiaohongshu.com/",
         }
         if cookie:
             headers["Cookie"] = cookie
@@ -269,7 +274,7 @@ class XiaohongshuCollector(BaseCollector):
                 "note_type": 0,
             }
             try:
-                resp = self.session.post(self.API_URL, json=body, timeout=self.timeout)
+                resp = self.session.post(self.api_url, json=body, timeout=self.timeout)
                 if resp.status_code in {401, 403}:
                     logger.warning("小红书接口鉴权失败，请配置有效 cookie/x-s/x-t。")
                     break
@@ -345,17 +350,25 @@ def run_pipeline(
     weibo_extra_headers: dict[str, str] | None,
     bilibili_extra_headers: dict[str, str] | None,
     ollama_model: str,
+    weibo_api_url: str,
+    bilibili_api_url: str,
+    xhs_api_url: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     collectors: list[BaseCollector] = [
         WeiboCollector(
             cookie=load_text_from_file(weibo_cookie_file),
             extra_headers=weibo_extra_headers,
+            api_url=weibo_api_url,
         ),
         BilibiliCollector(
             cookie=load_text_from_file(bilibili_cookie_file),
             extra_headers=bilibili_extra_headers,
+            api_url=bilibili_api_url,
         ),
-        XiaohongshuCollector(cookie=load_text_from_file(xhs_cookie_file)),
+        XiaohongshuCollector(
+            cookie=load_text_from_file(xhs_cookie_file),
+            api_url=xhs_api_url,
+        ),
     ]
 
     all_posts: list[Post] = []
@@ -445,6 +458,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bilibili-headers-file", default="", help="B 站额外 Headers txt 文件")
     parser.add_argument("--xhs-cookie-file", default="xhs_cookie.txt", help="小红书 Cookie txt 文件")
     parser.add_argument("--ollama-model", default="qwen2.5:7b", help="Ollama 模型名")
+    parser.add_argument(
+        "--weibo-api-url",
+        default=WeiboCollector.DEFAULT_API_URL,
+        help="微博搜索 API 地址（默认值可用，一般无需修改）",
+    )
+    parser.add_argument(
+        "--bilibili-api-url",
+        default=BilibiliCollector.DEFAULT_API_URL,
+        help="B站搜索 API 地址（平台变更时可覆盖）",
+    )
+    parser.add_argument(
+        "--xhs-api-url",
+        default=XiaohongshuCollector.DEFAULT_API_URL,
+        help="小红书搜索 API 地址（平台变更时可覆盖）",
+    )
     return parser
 
 
@@ -464,6 +492,9 @@ def main(argv: list[str] | None = None) -> None:
         weibo_extra_headers=load_headers_from_file(args.weibo_headers_file),
         bilibili_extra_headers=load_headers_from_file(args.bilibili_headers_file),
         ollama_model=args.ollama_model,
+        weibo_api_url=args.weibo_api_url,
+        bilibili_api_url=args.bilibili_api_url,
+        xhs_api_url=args.xhs_api_url,
     )
 
 

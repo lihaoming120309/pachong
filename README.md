@@ -71,3 +71,39 @@ python sentiment_topic_pipeline.py \
 from sentiment_topic_pipeline import main
 main([])  # 使用默认参数
 ```
+
+
+## API_URL 自检与修正
+
+脚本内置了可覆盖的 API 参数：
+
+- `--weibo-api-url`（默认：`https://m.weibo.cn/api/container/getIndex`）
+- `--bilibili-api-url`（默认：`https://api.bilibili.com/x/web-interface/search/type`）
+- `--xhs-api-url`（默认：`https://edith.xiaohongshu.com/api/sns/web/v1/search/notes`）
+
+你可以先用很小样本做连通性验证：
+
+```bash
+python sentiment_topic_pipeline.py --query 适老化设备 --limit 3 --output-dir output_smoke
+```
+
+若某平台抓取日志持续报错（401/403/空结果/JSON 结构变化），可按下面步骤定位正确 URL：
+
+1. 浏览器打开平台搜索页（微博/B站/小红书），按 `F12` 打开开发者工具。
+2. 进入 **Network**，勾选 `Preserve log`，并过滤 `Fetch/XHR`。
+3. 在页面里重新执行一次搜索，观察返回“列表数据”的请求。
+4. 点开请求，记录：
+   - **Request URL**（候选 API）
+   - **Query Params / Request Payload**（关键词、页码参数名）
+   - **Request Headers**（如 `Cookie`、`x-s`、`x-t` 等鉴权字段）
+5. 用 `curl` 或脚本复现该请求；若返回稳定 JSON 且含有列表字段，再写入命令行参数：
+
+```bash
+python sentiment_topic_pipeline.py \
+  --query 适老化设备 \
+  --limit 80 \
+  --bilibili-api-url '你确认过的新URL' \
+  --xhs-api-url '你确认过的新URL'
+```
+
+> 提示：平台接口变更频繁，`API_URL` 正确并不代表可直接抓取；鉴权 Cookie、签名头、Referer/Origin 通常同样关键。
