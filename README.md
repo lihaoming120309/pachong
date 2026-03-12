@@ -23,3 +23,14 @@ python sentiment_topic_pipeline.py --query 适老化设备 --limit 80 --output-d
 - `output/posts_with_topics.csv`：每条文本及其话题编号
 - `output/topic_summary.csv`：每个话题的词与 Ollama 命名
 - `output/analysis_report.json`：简要统计报告
+
+## Jupyter 里运行
+
+如果你在 Notebook 里执行脚本，`ipykernel` 会注入类似 `--f=...` 的参数。当前脚本已自动忽略未知参数，可直接运行。
+
+也可以在 Notebook 中显式调用：
+
+```python
+from sentiment_topic_pipeline import main
+main([])  # 使用默认参数
+```

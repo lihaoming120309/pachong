@@ -368,8 +368,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_arg_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    parser = build_arg_parser()
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        logger.info("忽略未知参数: %s", unknown)
     run_pipeline(
         query=args.query,
         per_platform_limit=args.limit,
