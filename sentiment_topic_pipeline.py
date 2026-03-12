@@ -28,7 +28,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class Post:
     platform: str
@@ -185,24 +184,20 @@ class BilibiliCollector(BaseCollector):
 
 
 class XiaohongshuCollector(BaseCollector):
-    """小红书 Web 搜索（通常需要 cookie + x-s/x-t 签名）。"""
-
     API_URL = "https://edith.xiaohongshu.com/api/sns/web/v1/search/notes"
 
-    def __init__(self, cookie: str = "", timeout: int = 10):
+    def __init__(self, cookie: str = "", x_s: str = "", x_t: str = "", timeout: int = 10):
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
+                "User-Agent": "...",
                 "Content-Type": "application/json;charset=UTF-8",
                 "Origin": "https://www.xiaohongshu.com",
                 "Referer": "https://www.xiaohongshu.com/",
                 "Cookie": cookie,
+                "x-s": x_s,
+                "x-t": x_t,
             }
         )
 
@@ -326,7 +321,23 @@ def run_pipeline(
     )
     topics, probs = topic_model.fit_transform(df["merged_text"].tolist())
     df["topic_id"] = topics
-    df["topic_prob"] = [float(max(p)) if p is not None else None for p in probs]
+    topic_probs = []
+    if probs is None:
+        topic_probs = [None] * len(df)
+    else:
+        for p in probs:
+            if p is None:
+                topic_probs.append(None)
+            elif isinstance(p, (float, int)):
+                topic_probs.append(float(p))
+            else:
+                try:
+                    topic_probs.append(float(max(p)))
+                except Exception:
+                    topic_probs.append(None)
+
+    df["topic_prob"] = topic_probs
+
 
     info = topic_model.get_topic_info().copy()
     info = info[info["Topic"] != -1].reset_index(drop=True)
