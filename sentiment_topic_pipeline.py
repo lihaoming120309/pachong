@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+import jieba
 import pandas as pd
 import requests
 from bertopic import BERTopic
@@ -28,6 +29,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+
+
+def jieba_tokenizer(text: str) -> list[str]:
+    """使用 jieba 进行中文分词，并过滤空白 token。"""
+    return [tok.strip() for tok in jieba.lcut(text or "") if tok.strip()]
 
 def load_text_from_file(file_path: str) -> str:
     """读取本地 txt 内容，找不到文件时返回空字符串。"""
@@ -366,7 +373,7 @@ def run_pipeline(
         raise RuntimeError("抓取文本为空，无法建模。")
 
     logger.info("开始 BERTopic 聚类，样本数: %s", len(df))
-    vectorizer_model = CountVectorizer(stop_words=["的", "了", "和", "是", "就", "都", "而", "及"])
+    vectorizer_model = CountVectorizer(tokenizer=jieba_tokenizer, token_pattern=None)
     topic_model = BERTopic(
         language="multilingual",
         vectorizer_model=vectorizer_model,

@@ -7,7 +7,7 @@
 1. 安装依赖：
 
 ```bash
-pip install pandas requests scikit-learn bertopic sentence-transformers umap-learn hdbscan
+pip install pandas requests scikit-learn bertopic sentence-transformers umap-learn hdbscan jieba
 ```
 
 2. 运行：
@@ -50,6 +50,10 @@ python sentiment_topic_pipeline.py \
   --weibo-headers-file weibo_headers.txt \
   --bilibili-headers-file bilibili_headers.txt
 ```
+
+## 分词说明
+
+- 主题建模阶段使用 `jieba` 对中文文本分词，不再手动维护固定停用词列表。
 
 ## 输出文件
 
