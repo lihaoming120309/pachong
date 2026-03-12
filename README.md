@@ -16,7 +16,38 @@ pip install pandas requests scikit-learn bertopic sentence-transformers umap-lea
 python sentiment_topic_pipeline.py --query 适老化设备 --limit 80 --output-dir output
 ```
 
-> 小红书通常需要有效 Cookie（以及可能的签名参数），可通过 `--xhs-cookie` 传入。
+> 微博/B站/小红书常常需要登录态。你可以通过 `--*-cookie` 直接传入 Cookie，或用 `--*-cookie-file` 从本地 txt 读取。
+
+可选：如果需要更完整请求头，可用 `--weibo-headers-file` / `--bilibili-headers-file` 传入 txt（每行 `Header-Name: value`）。
+
+
+## Cookie 与 Header 文件示例
+
+`weibo_cookie.txt` / `bilibili_cookie.txt` / `xhs_cookie.txt` 内容示例：
+
+```txt
+SESSDATA=xxx; bili_jct=xxx; ...
+```
+
+`weibo_headers.txt` 内容示例（B 站同理）：
+
+```txt
+X-Requested-With: XMLHttpRequest
+Accept-Language: zh-CN,zh;q=0.9
+```
+
+运行示例：
+
+```bash
+python sentiment_topic_pipeline.py \
+  --query 适老化设备 \
+  --limit 80 \
+  --weibo-cookie-file weibo_cookie.txt \
+  --bilibili-cookie-file bilibili_cookie.txt \
+  --xhs-cookie-file xhs_cookie.txt \
+  --weibo-headers-file weibo_headers.txt \
+  --bilibili-headers-file bilibili_headers.txt
+```
 
 ## 输出文件
 
