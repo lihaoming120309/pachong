@@ -16,12 +16,14 @@ pip install pandas requests scikit-learn bertopic sentence-transformers umap-lea
 python sentiment_topic_pipeline.py --query 适老化设备 --limit 80 --output-dir output
 ```
 
-> 微博/B站/小红书常常需要登录态。你可以通过 `--*-cookie` 直接传入 Cookie，或用 `--*-cookie-file` 从本地 txt 读取。
+> 微博/B站/小红书常常需要登录态。脚本默认直接读取本地 txt Cookie 文件（可通过 `--*-cookie-file` 指定路径）。
 
 可选：如果需要更完整请求头，可用 `--weibo-headers-file` / `--bilibili-headers-file` 传入 txt（每行 `Header-Name: value`）。
 
 
 ## Cookie 与 Header 文件示例
+
+默认文件名：`weibo_cookie.txt`、`bilibili_cookie.txt`、`xhs_cookie.txt`。
 
 `weibo_cookie.txt` / `bilibili_cookie.txt` / `xhs_cookie.txt` 内容示例：
 

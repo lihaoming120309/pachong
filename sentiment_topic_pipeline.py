@@ -232,18 +232,18 @@ class BilibiliCollector(BaseCollector):
 class XiaohongshuCollector(BaseCollector):
     API_URL = "https://www.xiaohongshu.com/explore"
 
-    def __init__(self, cookie: str = "acw_tc=0a00ddd717733097300226533ea0a5592e996c394f31046235c9d5d4020986; abRequestId=d668fb52-cfb4-5b9b-be8d-56b3c9b297f5; webBuild=6.0.0; xsecappid=xhs-pc-web; loadts=1773309747584; a1=19ce17f6189cp2cjtrq46nw0ph4fp9yvwbf0oipc050000281976; webId=f0b7e48a8ebbdf486eb806f1276b783f; websectiga=f3d8eaee8a8c63016320d94a1bd00562d516a5417bc43a032a80cbf70f07d5c0; sec_poison_id=41669d40-de1d-450f-b398-6b353217a0fd; gid=yjSdyWiYYiEdyjSdyWiKyD3UYjSUJSV9FA4KiS8IE8Ux4828iUjvhl888JYyjWK8j4jSYJ4W; web_session=040069b55cb51c10312bfcc7873b4b3179b9d9; id_token=VjEAAEE6a1nDKFXqzCHskG7FhCafOim+Gkzz8rzP4nKzfAWZX5UzQ2VEoiO/8bQ/b9uNPy2W/o6uMViYugQGKZG404MPfKinMKq+WlNKSQs49jA/ukC2NwdC9FIIn2Vz1OsL1L65; unread={%22ub%22:%22698dacf6000000001a031c6a%22%2C%22ue%22:%2269abe254000000002203119b%22%2C%22uc%22:30}", timeout: int = 10):
+    def __init__(self, cookie: str = "", timeout: int = 10):
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Content-Type": "text/html; charset=utf-8",
-                "Origin": "https://www.xiaohongshu.com",
-                "Referer": "strict-origin-when-cross-origin",
-                "Cookie": cookie
-            }
-        )
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Content-Type": "text/html; charset=utf-8",
+            "Origin": "https://www.xiaohongshu.com",
+            "Referer": "strict-origin-when-cross-origin",
+        }
+        if cookie:
+            headers["Cookie"] = cookie
+        self.session.headers.update(headers)
 
     def collect(self, query: str, limit: int = 100) -> list[Post]:
         posts: list[Post] = []
@@ -328,17 +328,23 @@ def run_pipeline(
     query: str,
     per_platform_limit: int,
     output_dir: Path,
-    weibo_cookie: str,
-    bilibili_cookie: str,
-    xhs_cookie: str,
+    weibo_cookie_file: str,
+    bilibili_cookie_file: str,
+    xhs_cookie_file: str,
     weibo_extra_headers: dict[str, str] | None,
     bilibili_extra_headers: dict[str, str] | None,
     ollama_model: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     collectors: list[BaseCollector] = [
-        WeiboCollector(cookie=weibo_cookie, extra_headers=weibo_extra_headers),
-        BilibiliCollector(cookie=bilibili_cookie, extra_headers=bilibili_extra_headers),
-        XiaohongshuCollector(cookie=xhs_cookie),
+        WeiboCollector(
+            cookie=load_text_from_file(weibo_cookie_file),
+            extra_headers=weibo_extra_headers,
+        ),
+        BilibiliCollector(
+            cookie=load_text_from_file(bilibili_cookie_file),
+            extra_headers=bilibili_extra_headers,
+        ),
+        XiaohongshuCollector(cookie=load_text_from_file(xhs_cookie_file)),
     ]
 
     all_posts: list[Post] = []
@@ -422,14 +428,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--query", default="适老化设备", help="搜索关键词")
     parser.add_argument("--limit", type=int, default=80, help="每个平台抓取上限")
     parser.add_argument("--output-dir", default="output", help="结果输出目录")
-    parser.add_argument("--weibo-cookie", default="", help="微博 Cookie 字符串")
-    parser.add_argument("--weibo-cookie-file", default="", help="微博 Cookie txt 文件")
+    parser.add_argument("--weibo-cookie-file", default="weibo_cookie.txt", help="微博 Cookie txt 文件")
     parser.add_argument("--weibo-headers-file", default="", help="微博额外 Headers txt 文件")
-    parser.add_argument("--bilibili-cookie", default="", help="B 站 Cookie 字符串")
-    parser.add_argument("--bilibili-cookie-file", default="", help="B 站 Cookie txt 文件")
+    parser.add_argument("--bilibili-cookie-file", default="bilibili_cookie.txt", help="B 站 Cookie txt 文件")
     parser.add_argument("--bilibili-headers-file", default="", help="B 站额外 Headers txt 文件")
-    parser.add_argument("--xhs-cookie", default="", help="小红书 Cookie")
-    parser.add_argument("--xhs-cookie-file", default="", help="小红书 Cookie txt 文件")
+    parser.add_argument("--xhs-cookie-file", default="xhs_cookie.txt", help="小红书 Cookie txt 文件")
     parser.add_argument("--ollama-model", default="qwen2.5:7b", help="Ollama 模型名")
     return parser
 
@@ -440,17 +443,13 @@ def main(argv: list[str] | None = None) -> None:
     if unknown:
         logger.info("忽略未知参数: %s", unknown)
 
-    weibo_cookie = args.weibo_cookie or load_text_from_file(args.weibo_cookie_file)
-    bilibili_cookie = args.bilibili_cookie or load_text_from_file(args.bilibili_cookie_file)
-    xhs_cookie = args.xhs_cookie or load_text_from_file(args.xhs_cookie_file)
-
     run_pipeline(
         query=args.query,
         per_platform_limit=args.limit,
         output_dir=Path(args.output_dir),
-        weibo_cookie=weibo_cookie,
-        bilibili_cookie=bilibili_cookie,
-        xhs_cookie=xhs_cookie,
+        weibo_cookie_file=args.weibo_cookie_file,
+        bilibili_cookie_file=args.bilibili_cookie_file,
+        xhs_cookie_file=args.xhs_cookie_file,
         weibo_extra_headers=load_headers_from_file(args.weibo_headers_file),
         bilibili_extra_headers=load_headers_from_file(args.bilibili_headers_file),
         ollama_model=args.ollama_model,
